@@ -300,4 +300,78 @@
   (var-get total-anomalies-detected)
 )
 
+;; Advanced anomaly detection and reporting function
+;; This comprehensive function performs real-time anomaly detection by:
+;; 1. Validating the asset and reporter authorization
+;; 2. Calculating statistical measures (mean, standard deviation)
+;; 3. Comparing current price against historical thresholds
+;; 4. Recording anomaly events with severity classification
+;; 5. Providing detailed anomaly analysis for monitoring systems
+;; @param asset-id: The identifier of the crypto asset to analyze
+;; @param current-price: The latest price point to evaluate for anomalies
+;; @returns: (response {...} uint) - Detailed anomaly report or error code
+(define-public (detect-and-report-anomaly (asset-id (string-ascii 20)) (current-price uint))
+  (let
+    (
+      ;; Verify reporter authorization and asset existence
+      (is-reporter (default-to false (map-get? authorized-reporters tx-sender)))
+      (asset-exists (is-some (map-get? registered-assets { asset-id: asset-id })))
+      
+      ;; Retrieve or calculate statistical measures
+      (mean-result (calculate-mean asset-id))
+      (mean-price (unwrap! mean-result (ok { anomaly-detected: false, severity: u0, message: "insufficient-data" })))
+      (std-dev-result (calculate-std-deviation asset-id mean-price))
+      (std-dev (unwrap! std-dev-result (ok { anomaly-detected: false, severity: u0, message: "calculation-error" })))
+      
+      ;; Get custom threshold or use default
+      (custom-threshold (map-get? asset-thresholds { asset-id: asset-id }))
+      (threshold (default-to ANOMALY-THRESHOLD (get threshold-multiplier custom-threshold)))
+      
+      ;; Calculate price deviation metrics
+      (price-deviation (if (> current-price mean-price)
+                          (- current-price mean-price)
+                          (- mean-price current-price)))
+      (anomaly-detected (is-anomaly current-price mean-price std-dev threshold))
+      (severity-level (calculate-severity price-deviation std-dev))
+    )
+    ;; Validate inputs and authorization
+    (asserts! is-reporter ERR-NOT-AUTHORIZED)
+    (asserts! asset-exists ERR-ASSET-NOT-FOUND)
+    (asserts! (and (> current-price u0) (<= current-price MAX-PRICE)) ERR-INVALID-PRICE)
+    
+    ;; Record anomaly event if detected
+    (if anomaly-detected
+      (begin
+        (map-set anomaly-records
+          { asset-id: asset-id, block-height: block-height }
+          {
+            price: current-price,
+            mean: mean-price,
+            deviation: price-deviation,
+            severity: severity-level,
+            reporter: tx-sender
+          }
+        )
+        (var-set total-anomalies-detected (+ (var-get total-anomalies-detected) u1))
+        (ok { 
+          anomaly-detected: true, 
+          severity: severity-level, 
+          message: "anomaly-recorded",
+          deviation: price-deviation,
+          mean: mean-price,
+          threshold: threshold
+        })
+      )
+      (ok { 
+        anomaly-detected: false, 
+        severity: u0, 
+        message: "normal-price-range",
+        deviation: price-deviation,
+        mean: mean-price,
+        threshold: threshold
+      })
+    )
+  )
+)
+
 
